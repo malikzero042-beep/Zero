@@ -1,14 +1,14 @@
-name: Create 32GB Windows RDP (AWS EC2)
+name: Create 16GB Windows 11 RDP (AWS EC2)
 
 on:
   workflow_dispatch:
 
 env:
-  INSTANCE_TYPE: m5.2xlarge   # ~32 GiB (AWS m5.2xlarge)
+  INSTANCE_TYPE: m5.xlarge  # Instance type with 16 GB RAM (AWS m5.xlarge)
   WINDOWS_ADMIN: AdminUser
 
 jobs:
-  create-32gb-windows:
+  create-16gb-windows-11:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -21,18 +21,17 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Launch EC2 Windows instance (replace AMI/SUBNET/SG/KEY)
+      - name: Launch EC2 Windows 11 instance (replace AMI/SUBNET/SG/KEY)
         id: launch
         run: |
           # ---- REQUIRED: Replace these placeholders with real values ----
-          AMI_ID="${{ secrets.WINDOWS_AMI_ID }}"           # e.g. a Windows Server 2019/2016 AMI for your region
+          AMI_ID="${{ secrets.WINDOWS_11_AMI_ID }}"  # Use Windows 11 AMI ID from your region
           SUBNET_ID="${{ secrets.SUBNET_ID }}"
-          SECURITY_GROUP_ID="${{ secrets.SECURITY_GROUP_ID }}"  # can restrict to management IP or leave minimal
-          KEY_NAME="${{ secrets.KEY_NAME }}"                    # optional for WinRM/RDP access
+          SECURITY_GROUP_ID="${{ secrets.SECURITY_GROUP_ID }}"  # Can restrict to management IP or leave minimal
+          KEY_NAME="${{ secrets.KEY_NAME }}"  # Optional for WinRM/RDP access
           INSTANCE_TYPE="${INSTANCE_TYPE}"
 
-          # User-data script for Windows (PowerShell). Installs Tailscale, enables RDP, creates user.
-          # IMPORTANT: adjust tailscale version or installer path if needed.
+          # User-data script for Windows 11. Installs Tailscale, enables RDP, creates user.
           read -r -d '' USERDATA <<'POWERSHELL'
           <powershell>
           # Wait for cloud-init-like readiness
@@ -61,8 +60,6 @@ jobs:
           Remove-Item $installerPath -Force
 
           # Bring up Tailscale with authkey passed as instance tag (we'll replace later)
-          # We'll try to read TAILSCALE_AUTH_KEY from instance tags; if not present, it will fail.
-          # For simplicity, use the EC2 instance's user-data-injected variable (see below).
           $env:TAILSCALE_AUTH_KEY = "${{ secrets.TAILSCALE_AUTH_KEY }}"
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTH_KEY --accept-routes=false
 
@@ -86,7 +83,7 @@ jobs:
             --security-group-ids "$SECURITY_GROUP_ID" \
             --key-name "$KEY_NAME" \
             --associate-public-ip-address \
-            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=gh-32gb-rdp}]" \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=gh-16gb-windows-11-rdp}]" \
             --user-data "$USERDATA" \
             --query 'Instances[0].InstanceId' --output text)
 
