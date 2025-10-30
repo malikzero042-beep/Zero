@@ -38,9 +38,15 @@ jobs:
           KEY_NAME="${{ secrets.KEY_NAME }}"
           INSTANCE_TYPE="${INSTANCE_TYPE}"
 
-          # Ensure that the parameters are being passed correctly
-          echo "Launching instance with AMI ID: $AMI_ID, Subnet: $SUBNET_ID, SG: $SECURITY_GROUP_ID, Instance Type: $INSTANCE_TYPE"
-
+          # Debugging: Display configuration
+          echo "Launching EC2 instance with the following parameters:"
+          echo "AMI ID: $AMI_ID"
+          echo "Instance Type: $INSTANCE_TYPE"
+          echo "Subnet ID: $SUBNET_ID"
+          echo "Security Group ID: $SECURITY_GROUP_ID"
+          echo "Key Name: $KEY_NAME"
+          
+          # Launch the EC2 instance and capture the instance ID
           INSTANCE_ID=$(aws ec2 run-instances \
             --image-id "$AMI_ID" \
             --count 1 \
@@ -53,7 +59,7 @@ jobs:
             --user-data "$USERDATA" \
             --query 'Instances[0].InstanceId' --output text)
 
-          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Instance ID: $INSTANCE_ID" >> $GITHUB_OUTPUT
 
       - name: Wait for instance to be running
         run: |
@@ -62,19 +68,16 @@ jobs:
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
           echo "Instance is running."
 
-      - name: Fetch public IP (if attached)
+      - name: Fetch Public IP (if attached)
         id: ip
         run: |
           INSTANCE_ID=${{ steps.launch.outputs.instance_id }}
           PUB_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
-          echo "public_ip=$PUB_IP" >> $GITHUB_OUTPUT
+          echo "Public IP: $PUB_IP" >> $GITHUB_OUTPUT
 
       - name: Show connection info and instructions
         run: |
           echo "EC2 Instance created: ${{ steps.launch.outputs.instance_id }}"
           echo "Public IP: ${{ steps.ip.outputs.public_ip }}"
-          echo "Tailscale IP and credentials are saved on the instance at:"
-          echo "  C:\\Windows\\Temp\\tailscale_ip.txt"
-          echo "  C:\\Windows\\Temp\\rdp_creds.txt"
-          echo ""
-          echo "Use AWS Session Manager / RDP or retrieve the files via WinRM/SSM to get the Tailscale IP and password."
+          echo "Check the EC2 instance system log for further debugging (AWS Console > EC2 > Instance > Actions > Instance Settings > Get System Log)"
+          echo "Check C:\\Windows\\Temp\\tailscale_ip.txt and C:\\Windows\\Temp\\rdp_creds.txt for Tailscale IP and RDP credentials."
