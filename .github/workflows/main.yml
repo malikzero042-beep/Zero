@@ -1,83 +1,78 @@
-name: Create 16GB Windows 11 RDP (AWS EC2)
+name: RDP
 
 on:
   workflow_dispatch:
 
-env:
-  INSTANCE_TYPE: m5.xlarge  # Instance type with 16 GB RAM (AWS m5.xlarge)
-  WINDOWS_ADMIN: AdminUser
-
 jobs:
-  create-16gb-windows-11:
-    runs-on: ubuntu-latest
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Display AMI ID and other config
+      - name: Configure Core RDP Settings
         run: |
-          echo "Using AMI ID: ${{ secrets.WINDOWS_11_AMI_ID }}"
-          echo "Using Instance Type: ${{ env.INSTANCE_TYPE }}"
-          echo "Using Subnet ID: ${{ secrets.SUBNET_ID }}"
-          echo "Using Security Group ID: ${{ secrets.SECURITY_GROUP_ID }}"
+          # Enable Remote Desktop and disable Network Level Authentication (if needed)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                             -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "SecurityLayer" -Value 0 -Force
 
-      - name: Launch EC2 Windows 11 instance
-        id: launch
-        run: |
-          # Launch instance
-          AMI_ID="${{ secrets.WINDOWS_11_AMI_ID }}"
-          SUBNET_ID="${{ secrets.SUBNET_ID }}"
-          SECURITY_GROUP_ID="${{ secrets.SECURITY_GROUP_ID }}"
-          KEY_NAME="${{ secrets.KEY_NAME }}"
-          INSTANCE_TYPE="${INSTANCE_TYPE}"
-
-          # Debugging: Display configuration
-          echo "Launching EC2 instance with the following parameters:"
-          echo "AMI ID: $AMI_ID"
-          echo "Instance Type: $INSTANCE_TYPE"
-          echo "Subnet ID: $SUBNET_ID"
-          echo "Security Group ID: $SECURITY_GROUP_ID"
-          echo "Key Name: $KEY_NAME"
+          # Remove any existing rule with the same name to avoid duplication
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
           
-          # Launch the EC2 instance and capture the instance ID
-          INSTANCE_ID=$(aws ec2 run-instances \
-            --image-id "$AMI_ID" \
-            --count 1 \
-            --instance-type "$INSTANCE_TYPE" \
-            --subnet-id "$SUBNET_ID" \
-            --security-group-ids "$SECURITY_GROUP_ID" \
-            --key-name "$KEY_NAME" \
-            --associate-public-ip-address \
-            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=gh-16gb-windows-11-rdp}]" \
-            --user-data "$USERDATA" \
-            --query 'Instances[0].InstanceId' --output text)
+          # For testing, allow any incoming connection on port 3389
+          netsh advfirewall firewall add rule name="RDP-Tailscale" `
+            dir=in action=allow protocol=TCP localport=3389
 
-          echo "Instance ID: $INSTANCE_ID" >> $GITHUB_OUTPUT
+          # (Optional) Restart the Remote Desktop service to ensure changes take effect
+          Restart-Service -Name TermService -Force
 
-      - name: Wait for instance to be running
+      - name: Create RDP User with Secure Password
         run: |
-          INSTANCE_ID=${{ steps.launch.outputs.instance_id }}
-          echo "Waiting for instance $INSTANCE_ID to be running..."
-          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
-          echo "Instance is running."
+          Add-Type -AssemblyName System.Security
+          $charSet = @{
+              Upper   = [char[]](65..90)      # A-Z
+              Lower   = [char[]](97..122)     # a-z
+              Number  = [char[]](48..57)      # 0-9
+              Special = ([char[]](33..47) + [char[]](58..64) +
+                         [char[]](91..96) + [char[]](123..126)) # Special characters
+          }
+          $rawPassword = @()
+          $rawPassword += $charSet.Upper | Get-Random -Count 4
+          $rawPassword += $charSet.Lower | Get-Random -Count 4
+          $rawPassword += $charSet.Number | Get-Random -Count 4
+          $rawPassword += $charSet.Special | Get-Random -Count 4
+          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          
+          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
+          
+          if (-not (Get-LocalUser -Name "RDP")) {
+              Write-Error "User creation failed"
+              exit 1
+          }
 
-      - name: Fetch Public IP (if attached)
-        id: ip
+      - name: Install Tailscale
         run: |
-          INSTANCE_ID=${{ steps.launch.outputs.instance_id }}
-          PUB_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
-          echo "Public IP: $PUB_IP" >> $GITHUB_OUTPUT
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
 
-      - name: Show connection info and instructions
+      - name: Establish Tailscale Connection
         run: |
-          echo "EC2 Instance created: ${{ steps.launch.outputs.instance_id }}"
-          echo "Public IP: ${{ steps.ip.outputs.public_ip }}"
-          echo "Check the EC2 instance system log for further debugging (AWS Console > EC2 > Instance > Actions > Instance Settings > Get System Log)"
-          echo "Check C:\\Windows\\Temp\\tailscale_ip.txt and C:\\Windows\\Temp\\rdp_creds.txt for Tailscale IP and RDP credentials."
+          # Bring up Tailscale with the provided auth key and set a unique hostname
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          
+          # Wait for Tailscale to assign an IP
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$
