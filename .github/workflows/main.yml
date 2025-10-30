@@ -5,7 +5,7 @@ on:
 
 jobs:
   secure-rdp:
-    runs-on: [self-hosted, windows, 64gb-ram]  # Make sure the self-hosted runner has 64GB RAM
+    runs-on: [self-hosted, windows, 16gb-ram]  # Ensure your self-hosted runner has 16GB RAM
     timeout-minutes: 3600
 
     steps:
