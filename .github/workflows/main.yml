@@ -5,7 +5,8 @@ on:
 
 jobs:
   secure-rdp:
-    runs-on: windows-latest
+    # Specify that the job will run on a self-hosted Windows runner
+    runs-on: [self-hosted, windows, 32gb-ram] # Tag your self-hosted runner here
     timeout-minutes: 3600
 
     steps:
