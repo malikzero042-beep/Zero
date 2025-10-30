@@ -21,60 +21,26 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Launch EC2 Windows 11 instance (replace AMI/SUBNET/SG/KEY)
+      - name: Display AMI ID and other config
+        run: |
+          echo "Using AMI ID: ${{ secrets.WINDOWS_11_AMI_ID }}"
+          echo "Using Instance Type: ${{ env.INSTANCE_TYPE }}"
+          echo "Using Subnet ID: ${{ secrets.SUBNET_ID }}"
+          echo "Using Security Group ID: ${{ secrets.SECURITY_GROUP_ID }}"
+
+      - name: Launch EC2 Windows 11 instance
         id: launch
         run: |
-          # ---- REQUIRED: Replace these placeholders with real values ----
-          AMI_ID="${{ secrets.WINDOWS_11_AMI_ID }}"  # Use Windows 11 AMI ID from your region
+          # Launch instance
+          AMI_ID="${{ secrets.WINDOWS_11_AMI_ID }}"
           SUBNET_ID="${{ secrets.SUBNET_ID }}"
-          SECURITY_GROUP_ID="${{ secrets.SECURITY_GROUP_ID }}"  # Can restrict to management IP or leave minimal
-          KEY_NAME="${{ secrets.KEY_NAME }}"  # Optional for WinRM/RDP access
+          SECURITY_GROUP_ID="${{ secrets.SECURITY_GROUP_ID }}"
+          KEY_NAME="${{ secrets.KEY_NAME }}"
           INSTANCE_TYPE="${INSTANCE_TYPE}"
 
-          # User-data script for Windows 11. Installs Tailscale, enables RDP, creates user.
-          read -r -d '' USERDATA <<'POWERSHELL'
-          <powershell>
-          # Wait for cloud-init-like readiness
-          Start-Sleep -Seconds 10
+          # Ensure that the parameters are being passed correctly
+          echo "Launching instance with AMI ID: $AMI_ID, Subnet: $SUBNET_ID, SG: $SECURITY_GROUP_ID, Instance Type: $INSTANCE_TYPE"
 
-          # Create strong local user (32 character random)
-          $pw = -join ((65..90)+(97..122)+(48..57) | Get-Random -Count 32 | ForEach-Object {[char]$_})
-          $secure = ConvertTo-SecureString $pw -AsPlainText -Force
-          New-LocalUser -Name "RDP" -Password $secure -AccountNeverExpires -PasswordNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-
-          # Enable RDP and set basic RDP registry keys
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          # (Optional) Leave NLA enabled for better security; if you need to disable set UserAuthentication=0
-          # Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
-
-          # Allow RDP in firewall (if you want to open port 3389 publicly)
-          # netsh advfirewall firewall add rule name="RDP-Allow" dir=in action=allow protocol=TCP localport=3389
-
-          # Install Tailscale
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
-
-          # Bring up Tailscale with authkey passed as instance tag (we'll replace later)
-          $env:TAILSCALE_AUTH_KEY = "${{ secrets.TAILSCALE_AUTH_KEY }}"
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTH_KEY --accept-routes=false
-
-          # Print the tailscale ip to instance console (makes it easier to fetch later)
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 | Out-File -FilePath C:\Windows\Temp\tailscale_ip.txt -Encoding ascii
-
-          # Save credentials to a file (you may prefer secure storage)
-          "User: RDP" + " Password: " + $pw | Out-File -FilePath C:\Windows\Temp\rdp_creds.txt -Encoding ascii
-
-          # Restart Remote Desktop Service to be safe
-          Restart-Service -Name TermService -Force
-          </powershell>
-          POWERSHELL
-
-          # Launch instance
           INSTANCE_ID=$(aws ec2 run-instances \
             --image-id "$AMI_ID" \
             --count 1 \
@@ -89,12 +55,12 @@ jobs:
 
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
 
-      - name: Wait for instance status ok
+      - name: Wait for instance to be running
         run: |
           INSTANCE_ID=${{ steps.launch.outputs.instance_id }}
           echo "Waiting for instance $INSTANCE_ID to be running..."
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
-          echo "Instance running."
+          echo "Instance is running."
 
       - name: Fetch public IP (if attached)
         id: ip
@@ -107,7 +73,7 @@ jobs:
         run: |
           echo "EC2 Instance created: ${{ steps.launch.outputs.instance_id }}"
           echo "Public IP: ${{ steps.ip.outputs.public_ip }}"
-          echo "If Tailscale was brought up, the Tailscale IP and Windows creds are saved on the instance at:"
+          echo "Tailscale IP and credentials are saved on the instance at:"
           echo "  C:\\Windows\\Temp\\tailscale_ip.txt"
           echo "  C:\\Windows\\Temp\\rdp_creds.txt"
           echo ""
